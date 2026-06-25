@@ -185,7 +185,7 @@
     body { background: #fff; font-size: 11px; }
     .app-header, .main > .panel, .main > .status-bar, .rpt-actions { display: none !important; }
     .main { padding: 0; max-width: 100%; }
-    #reportOutput { display: block !important; }
+    #reportOutput { display: block; }
     .report-wrap { border: none; box-shadow: none; border-radius: 0; }
     .rpt-header { background: var(--blue-dark) !important; }
     .sec-title { background: var(--blue-dark) !important; }
@@ -199,12 +199,15 @@
     .sec-download-btn { display: none !important; }
   }
 
-  /* When printing a single section, show ONLY the single-section holder */
+  /* When printing a single section, show ONLY the single-section holder.
+     These rules use higher specificity + !important so they win over the
+     generic @media print rules above, on screen AND on the print canvas. */
   body.single-section-mode #reportOutput,
   body.single-section-mode .main > .panel,
   body.single-section-mode .main > .status-bar { display: none !important; }
-  body.single-section-mode #singleSectionPrint.single-section-only { display: block; }
+  body.single-section-mode #singleSectionPrint.single-section-only { display: block !important; }
   @media print {
+    body.single-section-mode #reportOutput { display: none !important; }
     body.single-section-mode #singleSectionPrint.single-section-only { display: block !important; }
   }
 
@@ -429,12 +432,25 @@ function downloadSectionCSV(num) {
   const sd = _sectionData[num];
   if (!sd) return;
   const lines = [];
-  lines.push(sd.cols.map(c => csvEscape(c.label)).join(','));
-  sd.rows.forEach(r => {
-    const cells = (!Array.isArray(r) && r && r.subtotal) ? r.cells : r;
-    lines.push(cells.map(csvEscape).join(','));
-  });
-  if (sd.grandRow) lines.push(sd.grandRow.map(csvEscape).join(','));
+  if (sd.isCombined) {
+    sd.parts.forEach((part, i) => {
+      if (i > 0) lines.push(''); // blank separator row between tables
+      lines.push(part.label);
+      lines.push(part.cols.map(c => csvEscape(c.label)).join(','));
+      part.rows.forEach(r => {
+        const cells = (!Array.isArray(r) && r && r.subtotal) ? r.cells : r;
+        lines.push(cells.map(csvEscape).join(','));
+      });
+      if (part.grandRow) lines.push(part.grandRow.map(csvEscape).join(','));
+    });
+  } else {
+    lines.push(sd.cols.map(c => csvEscape(c.label)).join(','));
+    sd.rows.forEach(r => {
+      const cells = (!Array.isArray(r) && r && r.subtotal) ? r.cells : r;
+      lines.push(cells.map(csvEscape).join(','));
+    });
+    if (sd.grandRow) lines.push(sd.grandRow.map(csvEscape).join(','));
+  }
   const csv = lines.join('\r\n');
   const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
@@ -702,8 +718,35 @@ function generateReport() {
   const sec7 = makeSection(7,'Zone + Status + Current Owner (Combined)', makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)]), true);
   registerSection(7,'Zone + Status + Current Owner (Combined)', s7cols, s7rowsPlain, ['','','Grand Total', fmt(total)], makeSectionPrint(7,'Zone + Status + Current Owner (Combined)', makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)])));
 
+  // ── SECTION 8: Combined Report (Zone Wise Summary + Zone/Status/Owner Combined) ──
+  const sec1TableDisplay = makeTable(s1cols, s1rowsDisplay, ['<b>Grand Total</b>', fmt(total), fmt(gte15), fmt(gte30)]);
+  const sec7TableDisplay = makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)]);
+  const sec8inner =
+    `<div class="rpt-section">
+      <div class="sec-title"><span class="sec-num">1</span><span style="flex:1">Zone Wise Summary</span></div>
+      ${sec1TableDisplay}
+    </div>
+    <div class="rpt-section sec-full">
+      <div class="sec-title"><span class="sec-num">7</span><span style="flex:1">Zone + Status + Current Owner (Combined)</span></div>
+      ${sec7TableDisplay}
+    </div>`;
+  const sec8 = makeSection(8,'Combined Report — Zone Wise + Zone/Status/Owner', sec8inner, true);
+  // CSV/PDF for the combined section stores both tables as separate "parts"
+  // so the CSV export can write them as two clearly-labeled blocks.
+  const sec8PrintHTML = `<div class="rpt-section"><div class="sec-title"><span class="sec-num">1</span>Zone Wise Summary</div>${sec1TableDisplay}</div>
+    <div class="rpt-section sec-full"><div class="sec-title"><span class="sec-num">7</span>Zone + Status + Current Owner (Combined)</div>${sec7TableDisplay}</div>`;
+  _sectionData[8] = {
+    title: 'Combined Report - Zone Wise + Zone Status Owner',
+    isCombined: true,
+    parts: [
+      { label: 'Zone Wise Summary', cols: s1cols, rows: s1rows, grandRow: s1g },
+      { label: 'Zone + Status + Current Owner (Combined)', cols: s7cols, rows: s7rowsPlain, grandRow: ['','','Grand Total', fmt(total)] }
+    ],
+    html: sec8PrintHTML
+  };
+
   // ── RENDER ──
-  document.getElementById('sectionsGrid').innerHTML = sec1+sec2+sec3+sec4+sec5+sec6+sec7;
+  document.getElementById('sectionsGrid').innerHTML = sec1+sec2+sec3+sec4+sec5+sec6+sec7+sec8;
 
   const rangeStr = (dateFrom || dateTo)
     ? `  |  SR Date Range: ${dateFrom ? fmtDate(dateFrom) : 'Start'} to ${dateTo ? fmtDate(dateTo) : 'Today'}`
