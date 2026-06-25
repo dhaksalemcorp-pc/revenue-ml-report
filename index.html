@@ -193,7 +193,9 @@
     .grand-total td { background: #D6E4F7 !important; }
     .sections-grid { grid-template-columns: 1fr 1fr; gap: 12px; }
     .rpt-section { break-inside: avoid; page-break-inside: avoid; }
-    .sec-full { grid-column: 1 / -1; }
+    /* Large full-width sections (2,4,6,7,8) can span multiple pages —
+       removing break-inside:avoid on sec-full prevents the blank-page artifact */
+    .sec-full { grid-column: 1 / -1; break-inside: auto !important; page-break-inside: auto !important; }
     .rpt-body { padding: 12px; }
     .rpt-footer { display: flex !important; }
     .sec-download-btn { display: none !important; }
@@ -718,29 +720,65 @@ function generateReport() {
   const sec7 = makeSection(7,'Zone + Status + Current Owner (Combined)', makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)]), true);
   registerSection(7,'Zone + Status + Current Owner (Combined)', s7cols, s7rowsPlain, ['','','Grand Total', fmt(total)], makeSectionPrint(7,'Zone + Status + Current Owner (Combined)', makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)])));
 
-  // ── SECTION 8: Combined Report (Zone Wise Summary + Zone/Status/Owner Combined) ──
+  // ── SECTION 8: Combined Report (Zone Wise Summary + Zone/Status with Pending Days) ──
+  // Build Zone + Status with Total / >=15 / >=30 breakdown
+  const zsD = {};
+  _processed.forEach(r => {
+    const k = r.zone + '||' + r.status;
+    if (!zsD[k]) zsD[k] = { zone: r.zone, status: r.status, total: 0, g15: 0, g30: 0 };
+    zsD[k].total++;
+    if (r.days >= 15) zsD[k].g15++;
+    if (r.days >= 30) zsD[k].g30++;
+  });
+  const s8bItems = Object.values(zsD)
+    .sort((a,b) => ZONE_ORDER.indexOf(a.zone) - ZONE_ORDER.indexOf(b.zone) || b.total - a.total);
+  const s8bCols = [
+    {label:'Zone'}, {label:'Status'}, {label:'Total',right:true},
+    {label:'≥ 15 Days',right:true}, {label:'≥ 30 Days',right:true}
+  ];
+  const s8bRowsPlain = withZoneSubtotals(
+    s8bItems,
+    it => [it.zone, it.status, fmt(it.total), fmt(it.g15), fmt(it.g30)],
+    (bucket, zone) => {
+      const t  = bucket.reduce((a,b) => a + b.total, 0);
+      const g15 = bucket.reduce((a,b) => a + b.g15, 0);
+      const g30 = bucket.reduce((a,b) => a + b.g30, 0);
+      return [`${zone} Subtotal`, '', fmt(t), fmt(g15), fmt(g30)];
+    }
+  );
+  const s8bRowsDisplay = withZoneSubtotals(
+    s8bItems,
+    it => [`<span class="${ZONE_CLASS[it.zone]}">${it.zone}</span>`, it.status, fmt(it.total), fmt(it.g15), fmt(it.g30)],
+    (bucket, zone) => {
+      const t  = bucket.reduce((a,b) => a + b.total, 0);
+      const g15 = bucket.reduce((a,b) => a + b.g15, 0);
+      const g30 = bucket.reduce((a,b) => a + b.g30, 0);
+      return [`<span class="${ZONE_CLASS[zone]}">${zone} Subtotal</span>`, '', fmt(t), fmt(g15), fmt(g30)];
+    }
+  );
+  const s8bGrand = ['', '<b>Grand Total</b>', fmt(total), fmt(gte15), fmt(gte30)];
+  const s8bGrandPlain = ['', 'Grand Total', fmt(total), fmt(gte15), fmt(gte30)];
+
   const sec1TableDisplay = makeTable(s1cols, s1rowsDisplay, ['<b>Grand Total</b>', fmt(total), fmt(gte15), fmt(gte30)]);
-  const sec7TableDisplay = makeTable(s7cols, s7rowsDisplay, ['','','<b>Grand Total</b>',fmt(total)]);
+  const sec8bTableDisplay = makeTable(s8bCols, s8bRowsDisplay, s8bGrand);
   const sec8inner =
     `<div class="rpt-section">
       <div class="sec-title"><span class="sec-num">1</span><span style="flex:1">Zone Wise Summary</span></div>
       ${sec1TableDisplay}
     </div>
     <div class="rpt-section sec-full">
-      <div class="sec-title"><span class="sec-num">7</span><span style="flex:1">Zone + Status + Current Owner (Combined)</span></div>
-      ${sec7TableDisplay}
+      <div class="sec-title"><span class="sec-num">8</span><span style="flex:1">Zone + Status — Pending Days Breakdown</span></div>
+      ${sec8bTableDisplay}
     </div>`;
-  const sec8 = makeSection(8,'Combined Report — Zone Wise + Zone/Status/Owner', sec8inner, true);
-  // CSV/PDF for the combined section stores both tables as separate "parts"
-  // so the CSV export can write them as two clearly-labeled blocks.
+  const sec8 = makeSection(8,'Combined Report — Zone Wise + Zone/Status Pending Days', sec8inner, true);
   const sec8PrintHTML = `<div class="rpt-section"><div class="sec-title"><span class="sec-num">1</span>Zone Wise Summary</div>${sec1TableDisplay}</div>
-    <div class="rpt-section sec-full"><div class="sec-title"><span class="sec-num">7</span>Zone + Status + Current Owner (Combined)</div>${sec7TableDisplay}</div>`;
+    <div class="rpt-section sec-full"><div class="sec-title"><span class="sec-num">8</span>Zone + Status — Pending Days Breakdown</div>${sec8bTableDisplay}</div>`;
   _sectionData[8] = {
-    title: 'Combined Report - Zone Wise + Zone Status Owner',
+    title: 'Combined Report - Zone Wise + Zone Status Pending Days',
     isCombined: true,
     parts: [
       { label: 'Zone Wise Summary', cols: s1cols, rows: s1rows, grandRow: s1g },
-      { label: 'Zone + Status + Current Owner (Combined)', cols: s7cols, rows: s7rowsPlain, grandRow: ['','','Grand Total', fmt(total)] }
+      { label: 'Zone + Status — Pending Days Breakdown', cols: s8bCols, rows: s8bRowsPlain, grandRow: s8bGrandPlain }
     ],
     html: sec8PrintHTML
   };
